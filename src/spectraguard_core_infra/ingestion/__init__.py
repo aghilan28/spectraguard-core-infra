@@ -8,6 +8,7 @@ from .readers.file_reader import VideoFileReader
 from .readers.rtsp_reader import RTSPReader
 from .readers.usb_reader import USBReader
 from .scheduler import FrameScheduler
+from .supervisor import IngestionSupervisor
 
 __all__ = [
     "SourceState",
@@ -20,4 +21,5 @@ __all__ = [
     "RTSPReader",
     "USBReader",
     "FrameScheduler",
+    "IngestionSupervisor",
 ]

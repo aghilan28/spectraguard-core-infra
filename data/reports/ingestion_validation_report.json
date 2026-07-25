@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-07-25T14:39:47.429728+00:00",
+  "phase": "PHASE 5",
+  "subsystem": "spectraguard-core-infra-ingestion",
+  "benchmarks": {
+    "duration_seconds": 3.001,
+    "frames_acquired_by_consumer": 1864,
+    "frames_processed_by_source": 2054,
+    "frames_dropped_by_queue": 190,
+    "throughput_fps": 621.13,
+    "final_source_state": "STREAMING"
+  },
+  "overall_status": "READY"
+}
