@@ -4,6 +4,7 @@ from .enums import SourceState, SourceType, IngestionErrorCode
 from .exceptions import IngestionError
 from .models import SourceConfig
 from .base import FrameSource
+from .readers.file_reader import VideoFileReader
 
 __all__ = [
     "SourceState",
@@ -12,4 +13,5 @@ __all__ = [
     "IngestionError",
     "SourceConfig",
     "FrameSource",
+    "VideoFileReader",
 ]
