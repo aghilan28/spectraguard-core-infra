@@ -6,6 +6,7 @@ from .models import SourceConfig
 from .base import FrameSource
 from .readers.file_reader import VideoFileReader
 from .readers.rtsp_reader import RTSPReader
+from .readers.usb_reader import USBReader
 
 __all__ = [
     "SourceState",
@@ -16,4 +17,5 @@ __all__ = [
     "FrameSource",
     "VideoFileReader",
     "RTSPReader",
+    "USBReader",
 ]
