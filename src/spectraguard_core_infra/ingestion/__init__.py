@@ -5,6 +5,7 @@ from .exceptions import IngestionError
 from .models import SourceConfig
 from .base import FrameSource
 from .readers.file_reader import VideoFileReader
+from .readers.rtsp_reader import RTSPReader
 
 __all__ = [
     "SourceState",
@@ -14,4 +15,5 @@ __all__ = [
     "SourceConfig",
     "FrameSource",
     "VideoFileReader",
+    "RTSPReader",
 ]
