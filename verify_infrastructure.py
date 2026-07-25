@@ -5,7 +5,7 @@ import sys
 import time
 import json
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Ensure src is discoverable
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "src")))
@@ -151,7 +151,7 @@ def main():
     bench_results = run_benchmarks()
 
     report = {
-        "timestamp": datetime.now(datetime.UTC).isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
         "phase": "PHASE 3",
         "subsystem": "spectraguard-core-infra",
         "stress_test": stress_results,
