@@ -343,28 +343,52 @@ async def predict(file: UploadFile = File(...), authorization: Optional[str] = H
     _token = verify_token(authorization)
     logger.info(f"Prediction request received for file: {file.filename}")
     
-    # 1. Save uploaded file to uploads directory
-    uploads_dir = "data/uploads"
-    os.makedirs(uploads_dir, exist_ok=True)
-    file_path = os.path.join(uploads_dir, file.filename)
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
-        
-    # 2. Invoke CV Engine Pipeline
+    from pathlib import Path
+
     try:
-        cv_results = run_cv_engine_pipeline(file_path, file.filename)
+        # 1. Ensure the upload directory exists
+        uploads_dir = Path("data/uploads")
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 2. Resolve absolute path of saved file
+        upload_path = (uploads_dir / file.filename).resolve()
+        
+        # 3. Write uploaded file to disk
+        with open(upload_path, "wb") as f:
+            f.write(await file.read())
+            
+        # 4. Verify file exists after writing
+        if not upload_path.exists():
+            raise RuntimeError(f"Written file could not be verified on disk: {upload_path}")
+            
+        # 5. Add Logging
+        file_size = upload_path.stat().st_size
+        logger.info(f"Upload directory: {uploads_dir}")
+        logger.info(f"Saved file: {file.filename}")
+        logger.info(f"Absolute path: {upload_path}")
+        logger.info(f"Exists: {upload_path.exists()}")
+        logger.info(f"Size: {file_size} bytes")
+        
+    except Exception as e:
+        logger.error(f"Failed to save uploaded file to disk: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to save uploaded file to disk: {str(e)}")
+
+    # 6. Invoke CV Engine Pipeline
+    logger.info("Starting CV inference...")
+    try:
+        cv_results = run_cv_engine_pipeline(str(upload_path), file.filename)
     except Exception as e:
         logger.error(f"CV Engine inference failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"CV Engine inference failed: {str(e)}")
         
-    # 3. Store prediction details under prediction_id
+    # 7. Store prediction details under prediction_id
     prediction_id = f"pred_{uuid.uuid4().hex[:6]}"
     
     prediction_record = {
         "prediction_id": prediction_id,
         "status": "completed",
         "filename": file.filename,
-        "file_path": file_path,
+        "file_path": str(upload_path),
         "camera": "Lobby Entrance",
         "operator": "op-4471",
         "timestamp": cv_results["timestamp_utc"],
@@ -381,7 +405,7 @@ async def predict(file: UploadFile = File(...), authorization: Optional[str] = H
     
     predictions_history.append(prediction_record)
     
-    # 4. Return locked response contract
+    # 8. Return locked response contract
     return {
         "prediction_id": prediction_id,
         "status": "completed"
