@@ -67,8 +67,8 @@ def run_cv_engine_pipeline(file_path: str, filename: str) -> dict:
             "action_required": decision.action_required,
             "rationale": decision.rationale,
             "shap_attributions": [
-                {"factor": attr.factor, "weight": float(attr.weight)}
-                for attr in explanations[0].attributions
+                {"factor": factor, "weight": float(weight)}
+                for factor, weight in explanations[0].feature_attributions.items()
             ],
             "feature_snapshot": {str(k): float(v) for k, v in X.iloc[0].to_dict().items()},
             "timestamp_utc": pred_outputs[0].timestamp_utc,
@@ -377,6 +377,7 @@ async def predict(file: UploadFile = File(...), authorization: Optional[str] = H
     logger.info("Starting CV inference...")
     try:
         cv_results = run_cv_engine_pipeline(str(upload_path), file.filename)
+        logger.info("Explainability completed")
     except Exception as e:
         logger.error(f"CV Engine inference failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"CV Engine inference failed: {str(e)}")
@@ -402,10 +403,13 @@ async def predict(file: UploadFile = File(...), authorization: Optional[str] = H
         "feature_snapshot": cv_results["feature_snapshot"],
         "latency_ms": cv_results["latency_ms"]
     }
+    logger.info("Prediction packaged")
     
     predictions_history.append(prediction_record)
+    logger.info("Prediction stored")
     
     # 8. Return locked response contract
+    logger.info("Returning prediction_id")
     return {
         "prediction_id": prediction_id,
         "status": "completed"
