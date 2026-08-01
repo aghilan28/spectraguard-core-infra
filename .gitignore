@@ -64,3 +64,5 @@ models/weights/
 # Logs
 logs/
 *.log
+
+.env
