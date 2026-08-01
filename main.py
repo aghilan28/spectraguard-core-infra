@@ -39,6 +39,83 @@ def verify_token(authorization: Optional[str] = Header(None)):
     
     return parts[1]
 
+# In-memory database tables
+predictions_history = []
+
+cameras_db = [
+    {
+        "id": "CAM-01",
+        "name": "Lobby Entrance",
+        "location": "Main Lobby Port A",
+        "status": "online",
+        "resolution": "1920x1080",
+        "fps": 30,
+        "integrityScore": 0.998,
+        "thumbnail": "https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=600&q=80"
+    },
+    {
+        "id": "CAM-02",
+        "name": "Warehouse Gate",
+        "location": "Warehouse Block A",
+        "status": "anomalous",
+        "resolution": "1920x1080",
+        "fps": 24,
+        "integrityScore": 0.942,
+        "thumbnail": "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=600&q=80"
+    },
+    {
+        "id": "CAM-03",
+        "name": "Parking Zone B",
+        "location": "East Parking Area",
+        "status": "anomalous",
+        "resolution": "1280x720",
+        "fps": 15,
+        "integrityScore": 0.814,
+        "thumbnail": "https://images.unsplash.com/photo-1506521781263-d8422e82f27a?auto=format&fit=crop&w=600&q=80"
+    },
+    {
+        "id": "CAM-04",
+        "name": "Main Corridor",
+        "location": "Administration Wing",
+        "status": "online",
+        "resolution": "1920x1080",
+        "fps": 30,
+        "integrityScore": 0.991,
+        "thumbnail": "https://images.unsplash.com/photo-1517502884422-41eaead166d4?auto=format&fit=crop&w=600&q=80"
+    }
+]
+
+events_db = [
+    {
+        "id": "evt-1",
+        "time": "09:42 AM",
+        "camera": "Lobby Entrance",
+        "status": "online",
+        "event": "Integrity Verified"
+    },
+    {
+        "id": "evt-2",
+        "time": "09:37 AM",
+        "camera": "Warehouse Gate",
+        "status": "anomalous",
+        "event": "Blur Detected"
+    },
+    {
+        "id": "evt-3",
+        "time": "09:31 AM",
+        "camera": "Parking Zone B",
+        "status": "anomalous",
+        "event": "Lens Obstruction"
+    },
+    {
+        "id": "evt-4",
+        "time": "09:25 AM",
+        "camera": "Main Corridor",
+        "status": "online",
+        "event": "Integrity Verified"
+    }
+]
+
 @app.post("/api/v1/auth/login")
 def login(payload: LoginRequest):
     logger.info(f"Mock login request received for operator: {payload.username}")
@@ -48,29 +125,113 @@ def login(payload: LoginRequest):
         "expiresIn": 900
     }
 
+@app.post("/api/v1/auth/logout")
+def logout(token: str = Depends(verify_token)):
+    logger.info("Mock logout request received.")
+    return {
+        "success": True,
+        "message": "Session invalidated."
+    }
+
+@app.get("/api/v1/me")
+def get_me(token: str = Depends(verify_token)):
+    logger.info("Retrieving operator user profile context.")
+    return {
+        "username": "op-4471",
+        "role": "Lead Security Operator",
+        "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&q=80"
+    }
+
+@app.get("/api/v1/dashboard/summary")
+def get_summary(token: str = Depends(verify_token)):
+    logger.info("Calculating dashboard operational summary.")
+    # Derive summary metrics from in-memory cameras state
+    total_cameras = len(cameras_db)
+    anomalous = len([c for c in cameras_db if c["status"] == "anomalous"])
+    average_integrity = sum([c["integrityScore"] for c in cameras_db]) / total_cameras if total_cameras > 0 else 1.0
+    
+    return {
+        "systemIntegrity": f"{average_integrity * 100:.1f}%",
+        "activeCameras": total_cameras,
+        "integrityAlerts": anomalous,
+        "predictionsToday": len(predictions_history)
+    }
+
+@app.get("/api/v1/dashboard/sidebar")
+def get_sidebar_status(token: str = Depends(verify_token)):
+    logger.info("Retrieving active system components statuses.")
+    total_cameras = len(cameras_db)
+    return {
+        "backendStatus": "healthy",
+        "databaseStatus": "healthy",
+        "cvEngineStatus": "healthy",
+        "connectedCameras": total_cameras,
+        "platformHealth": 0.99
+    }
+
 @app.get("/api/v1/cameras")
 def get_cameras(token: str = Depends(verify_token)):
-    logger.info("Mock cameras retrieval triggered.")
+    logger.info("Cameras retrieval triggered.")
+    return cameras_db
+
+@app.get("/api/v1/events")
+def get_events(token: str = Depends(verify_token)):
+    logger.info("Events timeline query triggered.")
+    return events_db
+
+@app.get("/api/v1/notifications")
+def get_notifications(token: str = Depends(verify_token)):
+    logger.info("Notifications drawer query triggered.")
     return [
         {
-            "id": "CAM-01",
-            "name": "Front Entrance Camera",
-            "location": "Main Lobby Port A",
-            "status": "online",
-            "resolution": "1920x1080",
-            "fps": 30,
-            "integrityScore": 0.98
+            "id": "notif-1",
+            "title": "System Core Online",
+            "message": "SpectraGuard security core is fully synchronized.",
+            "time": "Just Now",
+            "category": "System",
+            "read": False
         },
         {
-            "id": "CAM-02",
-            "name": "Server Room A Camera",
-            "location": "Secure Unit Port B",
-            "status": "offline",
-            "resolution": "1920x1080",
-            "fps": 24,
-            "integrityScore": 0.72
+            "id": "notif-2",
+            "title": "Camera CAM-02 Flagged",
+            "message": "Degraded signal status flag raised on Warehouse Gate.",
+            "time": "10m ago",
+            "category": "Update",
+            "read": False
         }
     ]
+
+
+@app.get("/api/v1/predictions/history")
+def get_predictions_history(token: str = Depends(verify_token)):
+    logger.info("Predictions history retrieval triggered.")
+    return predictions_history
+
+@app.get("/api/v1/search")
+def search(q: str = "", token: str = Depends(verify_token)):
+    logger.info(f"Global search requested for query: {q}")
+    query = q.lower().strip()
+    if not query:
+        return {"cameras": [], "events": [], "predictions": []}
+        
+    matching_cameras = [
+        c for c in cameras_db 
+        if query in c["name"].lower() or query in c["location"].lower() or query in c["id"].lower()
+    ]
+    matching_events = [
+        e for e in events_db 
+        if query in e["camera"].lower() or query in e["event"].lower() or query in e["status"].lower()
+    ]
+    matching_predictions = [
+        p for p in predictions_history 
+        if query in p.get("prediction", "").lower() or query in p.get("filename", "").lower()
+    ]
+    
+    return {
+        "cameras": matching_cameras,
+        "events": matching_events,
+        "predictions": matching_predictions
+    }
 
 @app.get("/api/v1/forensics/{camera_id}")
 def get_forensics(camera_id: str):
@@ -133,3 +294,4 @@ def health():
 async def simulate_error(status_code: int):
     logger.info(f"Simulating error for HTTP status code: {status_code}")
     raise HTTPException(status_code=status_code, detail=f"Simulated fault engine code: {status_code}")
+
