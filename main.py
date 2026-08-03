@@ -7,77 +7,26 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 
+# 1. Add CV Engine to sys.path
+CV_ENGINE_SRC = "C:/Users/AKILA/OneDrive/ドキュメント/SPECTRAGUARD/spectraguard-cv-engine/src"
+if CV_ENGINE_SRC not in sys.path:
+    sys.path.insert(0, CV_ENGINE_SRC)
+
+from inference.predictor import SpectraGuardPredictor
+
+predictor = None
+
 def run_cv_engine_pipeline(file_path: str, filename: str) -> dict:
-    # 1. Add CV Engine to sys.path
-    CV_ENGINE_SRC = "C:/Users/AKILA/OneDrive/ドキュメント/SPECTRAGUARD/spectraguard-cv-engine/src"
-    if CV_ENGINE_SRC not in sys.path:
-        sys.path.insert(0, CV_ENGINE_SRC)
-
-    from spectraguard_cv_engine.ml.data.loader import EXPECTED_UNIFIED_FEATURES
-    from spectraguard_cv_engine.ai.runtime.loader import ModelLoader
-    from spectraguard_cv_engine.ai.runtime.config import RuntimeConfig
-    from spectraguard_cv_engine.ai.runtime.engine import InferenceRuntime
-    from spectraguard_cv_engine.ai.explainability.engine import ExplainabilityEngine
-    from spectraguard_cv_engine.ai.confidence.engine import ConfidenceEngine
-    from spectraguard_cv_engine.ai.decision.engine import DecisionEngine
-
-    # Store original working directory to revert later
+    global predictor
+    if predictor is None:
+        raise RuntimeError("Predictor is not initialized.")
     orig_cwd = os.getcwd()
     try:
-        # Load artifacts (using relative path to CV Engine directory)
         os.chdir("C:/Users/AKILA/OneDrive/ドキュメント/SPECTRAGUARD/spectraguard-cv-engine")
-        version_dir = "data/models/releases/v0.6.0"
-        artifacts = ModelLoader.load_version(version_dir)
-
-        # Initialize subsystems
-        runtime = InferenceRuntime(artifacts, RuntimeConfig())
-        explainer = ExplainabilityEngine(artifacts.trainer)
-        confidence_engine = ConfidenceEngine()
-
-        # Determine if anomalous or nominal deterministically based on filename/content
-        fn_lower = filename.lower()
-        is_anomaly = any(x in fn_lower for x in ["tamper", "alert", "anomaly", "suspicious", "fail", "error", "cam-02", "cam-03"])
-
-        # Build deterministic feature vector using numpy random seed to ensure consistent predictions
-        import numpy as np
-        import pandas as pd
-        
-        # Seed by file properties to keep it reproducible
-        file_size = os.path.getsize(file_path)
-        seed = (file_size % 10000) + (100 if is_anomaly else 0)
-        rng = np.random.default_rng(seed)
-        
-        loc = 1.5 if is_anomaly else -1.0
-        features = rng.normal(loc=loc, scale=0.5, size=(1, len(EXPECTED_UNIFIED_FEATURES)))
-        
-        X = pd.DataFrame(features, columns=EXPECTED_UNIFIED_FEATURES)
-        
-        # Run the actual CV Engine ML models
-        pred_outputs = runtime.predict(X)
-        explanations = explainer.explain(artifacts.scaler.transform(X), top_k=3)
-        conf_outputs = confidence_engine.evaluate([p.probability for p in pred_outputs])
-        decision = DecisionEngine.evaluate(pred_outputs[0], conf_outputs[0])
-
-        result = {
-            "prediction": "tampering_suspected" if pred_outputs[0].prediction == 1 else "nominal",
-            "confidence": conf_outputs[0].calibrated_score,
-            "confidence_tier": conf_outputs[0].tier.value,
-            "is_ambiguous": conf_outputs[0].is_ambiguous,
-            "severity": decision.severity.value,
-            "action_required": decision.action_required,
-            "rationale": decision.rationale,
-            "shap_attributions": [
-                {"factor": factor, "weight": float(weight)}
-                for factor, weight in explanations[0].feature_attributions.items()
-            ],
-            "feature_snapshot": {str(k): float(v) for k, v in X.iloc[0].to_dict().items()},
-            "timestamp_utc": pred_outputs[0].timestamp_utc,
-            "latency_ms": pred_outputs[0].latency_ms
-        }
+        return predictor.predict_video(file_path)
     finally:
         os.chdir(orig_cwd)
-        
-    return result
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -88,6 +37,36 @@ app = FastAPI(
     version="1.0.0-RC1",
     description="Deterministic mock api staging environment to validate connectivity."
 )
+
+@app.on_event("startup")
+def startup_event():
+    global predictor
+    logger.info("Initializing SpectraGuard inference engine...")
+    orig_cwd = os.getcwd()
+    try:
+        os.chdir("C:/Users/AKILA/OneDrive/ドキュメント/SPECTRAGUARD/spectraguard-cv-engine")
+        predictor = SpectraGuardPredictor(release_version="v1.0.0")
+        
+        # Print the clean operational banner exactly as requested via logger.info
+        logger.info("\n" + "\n".join([
+            "============================",
+            "Production Runtime Loaded",
+            "============================",
+            f"Release Version: {predictor.release_version}",
+            f"Model Type: {predictor.model_type}",
+            f"Model Path: {predictor.model_path}",
+            f"Scaler Path: {predictor.scaler_path}",
+            f"Metadata Path: {predictor.meta_path}",
+            f"Expected Features: {predictor.expected_features}",
+            f"SHA256: {predictor.model_hash}",
+            "============================"
+        ]))
+    except Exception as e:
+        logger.error(f"CRITICAL: Failed to load production runtime: {str(e)}")
+        # Exit backend to fail fast if anything is inconsistent
+        os._exit(1)
+    finally:
+        os.chdir(orig_cwd)
 
 # Enable wide CORS policy for client integration
 app.add_middleware(
@@ -194,6 +173,10 @@ events_db = [
 @app.post("/api/v1/auth/login")
 def login(payload: LoginRequest):
     logger.info(f"Mock login request received for operator: {payload.username}")
+    username_upper = payload.username.upper()
+    if not username_upper.startswith("OP-") or payload.password != "spectra":
+        logger.warning(f"Authentication failed for operator: {payload.username}")
+        raise HTTPException(status_code=401, detail="Unauthorized operator credentials.")
     return {
         "token": "spectraguard_secure_validation_token_xyz",
         "accessToken": "spectraguard_secure_validation_token_xyz",
@@ -383,7 +366,7 @@ async def predict(file: UploadFile = File(...), authorization: Optional[str] = H
         raise HTTPException(status_code=500, detail=f"CV Engine inference failed: {str(e)}")
         
     # 7. Store prediction details under prediction_id
-    prediction_id = f"pred_{uuid.uuid4().hex[:6]}"
+    prediction_id = cv_results.get("prediction_id") or f"pred_{uuid.uuid4().hex[:6]}"
     
     prediction_record = {
         "prediction_id": prediction_id,
@@ -392,7 +375,7 @@ async def predict(file: UploadFile = File(...), authorization: Optional[str] = H
         "file_path": str(upload_path),
         "camera": "Lobby Entrance",
         "operator": "op-4471",
-        "timestamp": cv_results["timestamp_utc"],
+        "timestamp": cv_results["prediction_timestamp"],
         "prediction": cv_results["prediction"],
         "confidence": cv_results["confidence"],
         "confidence_tier": cv_results["confidence_tier"],
@@ -407,6 +390,7 @@ async def predict(file: UploadFile = File(...), authorization: Optional[str] = H
     
     predictions_history.append(prediction_record)
     logger.info("Prediction stored")
+    logger.info(f"Prediction ID: {prediction_id}")
     
     # 8. Return locked response contract
     logger.info("Returning prediction_id")

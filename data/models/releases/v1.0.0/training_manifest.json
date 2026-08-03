@@ -1,0 +1,7 @@
+{
+    "timestamp_utc": "2026-08-01T23:11:41Z",
+    "model_type": "XGBoost",
+    "feature_schema": "VIRAT-10f-FFT",
+    "num_features": 10,
+    "release_version": "v1.0.0-production"
+}

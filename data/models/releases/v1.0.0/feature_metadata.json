@@ -1,0 +1,16 @@
+{
+    "feature_names": [
+        "fft_0",
+        "fft_1",
+        "fft_2",
+        "fft_3",
+        "fft_4",
+        "fft_5",
+        "fft_6",
+        "fft_7",
+        "fft_8",
+        "fft_9"
+    ],
+    "feature_count": 10,
+    "feature_type": "FFT_Spectral_High_Frequency_Energy"
+}

@@ -1,0 +1,7 @@
+{
+    "validation_accuracy": 0.803030303030303,
+    "validation_precision": 0.8225806451612904,
+    "validation_recall": 0.7727272727272727,
+    "validation_f1_score": 0.796875,
+    "validation_roc_auc": 0.8841827364554637
+}

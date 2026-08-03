@@ -1,0 +1,27 @@
+{
+    "timestamp_utc": "2026-08-02T06:25:28.274368+00:00",
+    "phase": "MODEL REBUILD - 12 FEATURE FREEZE SYNCED",
+    "model_type": "RandomForestClassifier",
+    "feature_count": 11,
+    "features_list": [
+        "mean_magnitude",
+        "max_magnitude",
+        "spectral_flatness",
+        "mean_intensity",
+        "skewness",
+        "mean_motion",
+        "laplacian_variance",
+        "edge_density",
+        "kurtosis",
+        "temporal_instability",
+        "log_spectral_energy"
+    ],
+    "hyperparameters": {
+        "n_estimators": 150,
+        "min_samples_split": 10,
+        "min_samples_leaf": 1,
+        "max_depth": null,
+        "class_weight": "balanced"
+    },
+    "release_version": "v0.7.5-production-12f-synchronized"
+}

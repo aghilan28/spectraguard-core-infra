@@ -1,0 +1,9 @@
+{
+    "model_comparison": {
+        "RandomForest": 0.8726894323191937,
+        "ExtraTrees": 0.8776275433359805,
+        "XGBoost": 0.8812498288468384
+    },
+    "selected_model": "XGBoost",
+    "best_cv_roc_auc": 0.8812498288468384
+}
