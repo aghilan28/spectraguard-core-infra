@@ -1,36 +1,105 @@
 import logging
 import sys
 import os
+import json
 import uuid
+import urllib.request
+import urllib.error
 from fastapi import FastAPI, Header, HTTPException, Depends, UploadFile, File
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 
-# 1. Add CV Engine to sys.path
-CV_ENGINE_SRC = "C:/Users/AKILA/OneDrive/ドキュメント/SPECTRAGUARD/spectraguard-cv-engine/src"
+# 1. Add CV Engine to sys.path (resolved lazily so the gateway still boots
+#    even when the absolute path differs between machines; override via env)
+CV_ENGINE_SRC = os.environ.get(
+    "CV_ENGINE_SRC",
+    "C:/Users/AKILA/OneDrive/ドキュメント/SPECTRAGUARD/spectraguard-cv-engine/src",
+)
 if CV_ENGINE_SRC not in sys.path:
     sys.path.insert(0, CV_ENGINE_SRC)
 
-from inference.predictor import SpectraGuardPredictor
-
 predictor = None
 
-def run_cv_engine_pipeline(file_path: str, filename: str) -> dict:
+
+def _load_predictor():
+    """Lazily import the SpectraGuardPredictor from the CV Engine source tree."""
     global predictor
-    if predictor is None:
-        raise RuntimeError("Predictor is not initialized.")
+    if predictor is not None:
+        return predictor
+    try:
+        from inference.predictor import SpectraGuardPredictor
+    except Exception as exc:
+        raise RuntimeError(f"CV Engine predictor import failed (CV_ENGINE_SRC={CV_ENGINE_SRC}): {exc}")
+    predictor = SpectraGuardPredictor(release_version="v1.0.0")
+    return predictor
+
+
+def run_cv_engine_pipeline(file_path: str, filename: str) -> dict:
+    pred = _load_predictor()
     orig_cwd = os.getcwd()
     try:
-        os.chdir("C:/Users/AKILA/OneDrive/ドキュメント/SPECTRAGUARD/spectraguard-cv-engine")
-        return predictor.predict_video(file_path)
+        cv_root = os.environ.get(
+            "CV_ENGINE_ROOT",
+            os.path.dirname(os.path.dirname(CV_ENGINE_SRC)),
+        )
+        if os.path.isdir(cv_root):
+            os.chdir(cv_root)
+        return pred.predict_video(file_path)
     finally:
         os.chdir(orig_cwd)
 
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("spectraguard-mock-backend")
+logger = logging.getLogger("spectraguard-gateway")
+
+# --------------------------------------------------------------------------- #
+# Real CV Engine integration
+# --------------------------------------------------------------------------- #
+# The gateway proxies live camera / inference / tamper / snapshot operations to
+# the actual SpectraGuard CV Engine API (spectraguard-cv-engine/backend/api).
+# Point this at whatever port the CV engine backend runs on. When the CV engine
+# is unreachable the gateway degrades gracefully to its in-memory fallback data
+# so the UI never hard-crashes during development.
+CV_ENGINE_API_URL = os.environ.get("CV_ENGINE_API_URL", "http://localhost:8080/api/v1").rstrip("/")
+
+
+def cv_proxy(path: str, method: str = "GET", body=None, timeout: float = 4.0):
+    """Forward a request to the real CV Engine API and return (raw_bytes, content_type)."""
+    url = f"{CV_ENGINE_API_URL}{path}"
+    data = None
+    headers = {}
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read()
+        content_type = resp.headers.get("Content-Type", "application/json")
+        return raw, content_type
+
+
+def cv_json(path: str, method: str = "GET", body=None, default=None):
+    """Proxy a JSON endpoint; returns ``default`` when the CV engine is offline."""
+    try:
+        raw, _ct = cv_proxy(path, method=method, body=body)
+        return json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        logger.warning(f"CV Engine proxy {method} {path} unavailable: {exc}")
+        return default
+
+
+def cv_require(path: str, method: str = "GET", body=None):
+    """Proxy a JSON endpoint; raises HTTPException(502) when the CV engine is offline."""
+    try:
+        raw, _ct = cv_proxy(path, method=method, body=body)
+        return json.loads(raw.decode("utf-8"))
+    except urllib.error.HTTPError as http_err:
+        raise HTTPException(status_code=http_err.code, detail=f"CV Engine error: {http_err.read().decode('utf-8', errors='ignore')[:300]}")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"CV Engine unreachable: {exc}")
 
 app = FastAPI(
     title="SpectraGuard Mock API Gateway",
@@ -44,9 +113,14 @@ def startup_event():
     logger.info("Initializing SpectraGuard inference engine...")
     orig_cwd = os.getcwd()
     try:
-        os.chdir("C:/Users/AKILA/OneDrive/ドキュメント/SPECTRAGUARD/spectraguard-cv-engine")
-        predictor = SpectraGuardPredictor(release_version="v1.0.0")
-        
+        cv_root = os.environ.get(
+            "CV_ENGINE_ROOT",
+            os.path.dirname(os.path.dirname(CV_ENGINE_SRC)),
+        )
+        if os.path.isdir(cv_root):
+            os.chdir(cv_root)
+        predictor = _load_predictor()
+
         # Print the clean operational banner exactly as requested via logger.info
         logger.info("\n" + "\n".join([
             "============================",
@@ -62,9 +136,7 @@ def startup_event():
             "============================"
         ]))
     except Exception as e:
-        logger.error(f"CRITICAL: Failed to load production runtime: {str(e)}")
-        # Exit backend to fail fast if anything is inconsistent
-        os._exit(1)
+        logger.warning(f"CV Engine predictor unavailable at startup (continuing; /predict will fail): {str(e)}")
     finally:
         os.chdir(orig_cwd)
 
@@ -229,12 +301,20 @@ def get_sidebar_status(token: str = Depends(verify_token)):
 
 @app.get("/api/v1/cameras")
 def get_cameras(token: str = Depends(verify_token)):
-    logger.info("Cameras retrieval triggered.")
+    logger.info("Cameras retrieval triggered (real CV Engine registry first).")
+    real = cv_json("/cameras", default=None)
+    if real is not None:
+        return real
+    logger.warning("CV Engine offline - falling back to in-memory camera rows.")
     return cameras_db
 
 @app.get("/api/v1/events")
 def get_events(token: str = Depends(verify_token)):
-    logger.info("Events timeline query triggered.")
+    logger.info("Events timeline query triggered (real CV Engine events first).")
+    real = cv_json("/events/latest?limit=20", default=None)
+    if isinstance(real, list):
+        return real
+    logger.warning("CV Engine offline - falling back to in-memory event rows.")
     return events_db
 
 @app.get("/api/v1/notifications")
@@ -431,3 +511,117 @@ async def simulate_error(status_code: int):
     logger.info(f"Simulating error for HTTP status code: {status_code}")
     raise HTTPException(status_code=status_code, detail=f"Simulated fault engine code: {status_code}")
 
+
+
+# =========================================================================== #
+# LIVE ANALYSIS PROXY ROUTES
+# ---------------------------------------------------------------------------
+# These endpoints forward to the real CV Engine API so the web frontend can
+# drive the live camera GUI: start/stop the capture, poll frames, run the
+# physics inference engine and fetch the tamper screenshot used on the
+# Predict page. Everything still requires the gateway Bearer token.
+# =========================================================================== #
+
+class CameraSourceRequest(BaseModel):
+    camera_source: Optional[str] = None
+
+
+@app.post("/api/v1/camera/start")
+def camera_start(payload: Optional[CameraSourceRequest] = None, authorization: Optional[str] = Header(None)):
+    verify_token(authorization)
+    logger.info("Starting live camera capture on CV Engine...")
+    return cv_require("/camera/start", method="POST", body={"camera_source": payload.camera_source} if payload and payload.camera_source else None)
+
+
+@app.post("/api/v1/camera/stop")
+def camera_stop(authorization: Optional[str] = Header(None)):
+    verify_token(authorization)
+    logger.info("Stopping live camera capture on CV Engine...")
+    return cv_require("/camera/stop", method="POST", body=None)
+
+
+@app.get("/api/v1/camera/status")
+def camera_status(authorization: Optional[str] = Header(None)):
+    verify_token(authorization)
+    return cv_require("/camera/status")
+
+
+@app.get("/api/v1/camera/info")
+def camera_info(authorization: Optional[str] = Header(None)):
+    verify_token(authorization)
+    return cv_require("/camera/info")
+
+
+@app.get("/api/v1/camera/frame")
+def camera_frame(authorization: Optional[str] = Header(None)):
+    """Live JPEG frame from the CV engine (used as the real 'screenshot')."""
+    verify_token(authorization)
+    try:
+        raw, content_type = cv_proxy("/camera/frame")
+        return Response(content=raw, media_type=content_type or "image/jpeg")
+    except Exception as exc:
+        logger.error(f"Failed to fetch live frame: {exc}")
+        raise HTTPException(status_code=502, detail=f"Live frame unavailable: {exc}")
+
+
+@app.post("/api/v1/inference/run")
+def inference_run(authorization: Optional[str] = Header(None)):
+    """Run the real CV physics inference engine against the buffered frames."""
+    verify_token(authorization)
+    return cv_require("/inference/run", method="POST", body=None)
+
+
+@app.get("/api/v1/inference/latest")
+def inference_latest(authorization: Optional[str] = Header(None)):
+    verify_token(authorization)
+    return cv_require("/inference/latest")
+
+
+@app.get("/api/v1/inference/history")
+def inference_history(authorization: Optional[str] = Header(None)):
+    verify_token(authorization)
+    return cv_require("/inference/history")
+
+
+@app.get("/api/v1/tamper/latest")
+def tamper_latest(authorization: Optional[str] = Header(None)):
+    verify_token(authorization)
+    return cv_require("/tamper/latest")
+
+
+@app.get("/api/v1/tamper/history")
+def tamper_history(authorization: Optional[str] = Header(None)):
+    verify_token(authorization)
+    return cv_require("/tamper/history")
+
+
+@app.get("/api/v1/events/snapshot/{event_uuid}")
+def events_snapshot(event_uuid: str, authorization: Optional[str] = Header(None)):
+    """Return the JPEG screenshot captured at the moment tampering was detected."""
+    verify_token(authorization)
+    try:
+        raw, content_type = cv_proxy(f"/events/snapshot/{event_uuid}")
+        return Response(content=raw, media_type=content_type or "image/jpeg")
+    except urllib.error.HTTPError as http_err:
+        raise HTTPException(status_code=http_err.code, detail="Snapshot not found for the requested event.")
+    except Exception as exc:
+        logger.error(f"Failed to fetch snapshot {event_uuid}: {exc}")
+        raise HTTPException(status_code=502, detail=f"Snapshot unavailable: {exc}")
+
+
+@app.post("/api/v1/cameras/register")
+def cameras_register(payload: dict, authorization: Optional[str] = Header(None)):
+    verify_token(authorization)
+    return cv_require("/cameras/register", method="POST", body=payload)
+
+
+@app.post("/api/v1/cameras/{camera_id}/heartbeat")
+def cameras_heartbeat(camera_id: str, payload: dict, authorization: Optional[str] = Header(None)):
+    verify_token(authorization)
+    return cv_require(f"/cameras/{camera_id}/heartbeat", method="POST", body=payload)
+
+
+@app.get("/api/v1/events/latest")
+def events_latest(limit: int = 10, authorization: Optional[str] = Header(None)):
+    verify_token(authorization)
+    return cv_require(f"/events/latest?limit={limit}")
